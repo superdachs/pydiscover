@@ -12,6 +12,10 @@ from bs4 import BeautifulSoup
 from threading import Thread
 import time
 import datetime
+import nmap
+import libnmap.process
+import libnmap.parser
+import re
 
 class Daemon(object):
     """
@@ -163,8 +167,16 @@ class DiscoveryDaemon(Daemon):
 
     class ReturnThread(Thread):
         
+        def start(self, thread=None):
+            self.oldThread = thread
+            DiscoveryDaemon.log("starting Thread " + str(self.ident), "DEBUG")
+            super(DiscoveryDaemon.ReturnThread, self).start()
+
         def run(self):
             self.exception = None
+            if self.oldThread:
+                DiscoveryDaemon.log("Thread %d waiting for old thread %d" % (self.ident, oldThread.ident), 'DEBUG')
+                self.oldThread.join()
             try:
                 self.ret = self._target(*self._args, **self._kwargs)
             except BaseException as e:
@@ -177,10 +189,10 @@ class DiscoveryDaemon(Daemon):
             return self.ret
 
 
-    IP_RANGES = []
+    IP_RANGES = ['192.168.16.0/24', '192.168.17.0/24']
     PORTS = []
     HOST_LIST = []
-    PORT_LIST = []
+    PORT_LIST = {}
     LOG_LEVEL = 'DEBUG'
 
 
@@ -197,7 +209,8 @@ class DiscoveryDaemon(Daemon):
                 'NONE': 0,
                 'ERROR': 1,
                 'WARNING': 2,
-                'DEBUG': 3,
+                'INFO': 3,
+                'DEBUG': 4,
                 }
 
         if log_levels[level] > log_levels[self.LOG_LEVEL]:
@@ -208,9 +221,6 @@ class DiscoveryDaemon(Daemon):
 
                 
 
-    # finds open ports on given host ip address
-    # e.g. 192.168.178.1
-    # @return ports as dict
     def findPorts(self,ip_address):
         return {ip_address: 
                 {
@@ -220,23 +230,30 @@ class DiscoveryDaemon(Daemon):
                  },
                 } 
 
-    # finds pingable hosts in given ip range
-    # e.g. 192.168.178.1-10, 192.168.178.0/24, 192.168.178.0|255.255.255.0 (nmap format)
-    # @return ip addresses as list
-    def findHosts(self,ip_range):
-        return [
-                "192.168.178.2",
-                "192.168.178.5",
-                "192.168.178.10",
-                ]
 
-    # starts a thread for every ip range definition
-    # updates internal ip cache
+    def findHosts(self,ip_range):
+
+        ret_hosts = []
+
+        nmap_process = libnmap.process.NmapProcess(targets=ip_range, options="-sP")
+        nmap_process.run()
+
+
+        nmap_report = libnmap.parser.NmapParser.parse(nmap_process.stdout)
+        for host in nmap_report.hosts:
+            if host.is_up():
+                ret_hosts.append(host.ipv4)
+        
+        
+        self.log(str(ret_hosts), 'INFO')
+        return ret_hosts
+
+
     def scanHosts(self):
         threads = []
         tmp_host_list = []
-        for ip_range in IP_RANGES:
-            thread = self.ReturnThread(target=self.findHosts, args=(ip_range))
+        for ip_range in self.IP_RANGES:
+            thread = self.ReturnThread(target=self.findHosts, args=([ip_range]))
             threads.append(thread)
             thread.start()
 
@@ -245,13 +262,12 @@ class DiscoveryDaemon(Daemon):
             
         self.HOST_LIST = tmp_host_list
 
-    # starts a thread for every ip address
-    # updates internal ports cache
+
     def scanPorts(self):
         threads = []
         tmp_portlist = {}
-        for ip_address in HOST_LIST:
-            thread = self.ReturnThread(target=self.findPorts, args=(ip_address))
+        for ip_address in self.HOST_LIST:
+            thread = self.ReturnThread(target=self.findPorts, args=([ip_address]))
             threads.append(thread)
             thread.start()
 
@@ -261,24 +277,25 @@ class DiscoveryDaemon(Daemon):
         self.PORT_LIST = tmp_portlist
 
 
-    # get the actual related scan result as dict
     def getResult(self):
         ret_dict = {}
         for host in self.HOST_LIST:
-            ret_dict.update({host: self.PORT_LIST(host)})
+            ret_dict.update({host: self.PORT_LIST[host]})
         return ret_dict
 
     
     def run(self):
+        oldHostsThread = None
+        oldPortsThread = None
         while True:
             try:
                 time.sleep(5)
                 hostsThread = self.ReturnThread(target=self.scanHosts)
                 portsThread = self.ReturnThread(target=self.scanPorts)
-                hostsThread.start()
-                portsThread.start()
-                hostsThread.join()
-                portsThread.join()
+                hostsThread.start(oldHostsThread)
+                portsThread.start(oldPortsThread)
+                oldHostsThread = hostsThread
+                oldPortsThread = portsThread
                 self.log(str(self.getResult()), 'DEBUG')
             except Exception as exception:
                 self.log(str(exception), 'ERROR')
