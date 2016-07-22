@@ -167,16 +167,11 @@ class DiscoveryDaemon(Daemon):
 
     class ReturnThread(Thread):
         
-        def start(self, thread=None):
-            self.oldThread = thread
-            DiscoveryDaemon.log("starting Thread " + str(self.ident), "DEBUG")
+        def start(self):
             super(DiscoveryDaemon.ReturnThread, self).start()
 
         def run(self):
             self.exception = None
-            if self.oldThread:
-                DiscoveryDaemon.log("Thread %d waiting for old thread %d" % (self.ident, oldThread.ident), 'DEBUG')
-                self.oldThread.join()
             try:
                 self.ret = self._target(*self._args, **self._kwargs)
             except BaseException as e:
@@ -190,7 +185,7 @@ class DiscoveryDaemon(Daemon):
 
 
     IP_RANGES = ['192.168.16.0/24', '192.168.17.0/24']
-    PORTS = []
+    PORTS = [22, 80, 443, 161, 23, 1194, 8000]
     HOST_LIST = []
     PORT_LIST = {}
     LOG_LEVEL = 'DEBUG'
@@ -221,7 +216,16 @@ class DiscoveryDaemon(Daemon):
 
                 
 
-    def findPorts(self,ip_address):
+    def findPorts(self, ip_address):
+        self.log('starting port scan...', 'INFO')
+
+  
+        nmap_process = libnmap.process.NmapProcess(targets=ip_address, options="-sS")
+        nmap_process.run()
+        nmap_report = libnmap.parser.NmapParser.parse(nmap_process.stdout)
+        self.log("nmap report for " + ip_address + " " + str(nmap_report), 'DEBUG')
+
+
         return {ip_address: 
                 {
                 22: 'udp',
@@ -231,8 +235,8 @@ class DiscoveryDaemon(Daemon):
                 } 
 
 
-    def findHosts(self,ip_range):
-
+    def findHosts(self, ip_range):
+        self.log('starting host scan...', 'INFO')
         ret_hosts = []
 
         nmap_process = libnmap.process.NmapProcess(targets=ip_range, options="-sP")
@@ -245,7 +249,7 @@ class DiscoveryDaemon(Daemon):
                 ret_hosts.append(host.ipv4)
         
         
-        self.log(str(ret_hosts), 'INFO')
+        self.log(str(ret_hosts), 'DEBUG')
         return ret_hosts
 
 
@@ -285,20 +289,27 @@ class DiscoveryDaemon(Daemon):
 
     
     def run(self):
-        oldHostsThread = None
-        oldPortsThread = None
+        self.log('deamon started. entering cycle.', 'INFO')
         while True:
             try:
-                time.sleep(5)
-                hostsThread = self.ReturnThread(target=self.scanHosts)
-                portsThread = self.ReturnThread(target=self.scanPorts)
-                hostsThread.start(oldHostsThread)
-                portsThread.start(oldPortsThread)
-                oldHostsThread = hostsThread
-                oldPortsThread = portsThread
-                self.log(str(self.getResult()), 'DEBUG')
+                self.log('starting host scan threads...', 'INFO')
+                ht = self.ReturnThread(target=self.scanHosts)
+                ht.start()
+                self.log('starting port scan threads...', 'INFO')
+                pt = self.ReturnThread(target=self.scanPorts)
+                pt.start()
+                self.log('port and host scans started... now waiting for results...', 'INFO')
+                ht.join()
+                pt.join()
+                self.log('port and host scans finished.', 'INFO')
             except Exception as exception:
                 self.log(str(exception), 'ERROR')
+            try:
+                self.log(str(self.getResult()), 'INFO')
+            except Exception as exception:
+                self.log(str(exception), 'ERROR')
+            self.log("waiting 5 seconds...", 'INFO')
+            time.sleep(5)
 
 def main():
     """
