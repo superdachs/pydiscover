@@ -184,7 +184,7 @@ class DiscoveryDaemon(Daemon):
             return self.ret
 
 
-    IP_RANGES = ['192.168.16.0/24', '192.168.17.0/24']
+    IP_RANGES = ['172.20.4.0/24']
     PORTS = [22, 80, 443, 161, 23, 1194, 8000]
     HOST_LIST = []
     PORT_LIST = {}
@@ -221,20 +221,26 @@ class DiscoveryDaemon(Daemon):
 
   
         nmap_process = libnmap.process.NmapProcess(targets=ip_address, options="-sS")
-        nmap_process.run()
-        nmap_report = libnmap.parser.NmapParser.parse(nmap_process.stdout)
-        self.log("nmap report for " + ip_address + " " + str(nmap_report), 'DEBUG')
+        test = nmap_process.run()
+
+        report = libnmap.parser.NmapParser.parse(nmap_process.stdout)
+
+        host = report.hosts[0]
+
+        ports = host.get_open_ports()
+
+        portsret = {}
+
+        for port in ports:
+            portsret.update({port[0]: port[1]})
 
 
-        return {ip_address: 
-                {
-                22: 'udp',
-                80: 'tcp',
-                443: 'tcp',
-                 },
-                } 
 
 
+        self.log({ip_address: portsret}, 'DEBUG')
+
+        return {ip_address: portsret}
+    
     def findHosts(self, ip_range):
         self.log('starting host scan...', 'INFO')
         ret_hosts = []
